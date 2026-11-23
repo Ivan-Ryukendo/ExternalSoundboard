@@ -30,6 +30,15 @@ Then restart Discord and enable **ExternalSoundboard** in *Settings > Vencord > 
 
 Details and a self-check: [docs/install-betterdiscord.md](docs/install-betterdiscord.md).
 
+### Uninstall
+
+Close Discord, then run the uninstaller. It asks what to remove: the plugin only, the plugin plus Vencord, the plugin plus BetterDiscord, or everything. It un-patches Discord before deleting anything, removes the plugin's saved settings, and never deletes a Vencord folder you made yourself. Your Vencord and BetterDiscord settings, themes and other plugins are kept unless you say otherwise.
+
+| OS | Run this |
+|---|---|
+| **Windows** | Double-click [`uninstall-windows.bat`](uninstall-windows.bat), or in PowerShell:<br>`irm https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.ps1 \| iex` |
+| **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.sh \| bash` (removes the plugin and Vencord; for BetterDiscord itself use its own installer's Uninstall) |
+
 ### Last step for both: a loopback audio device
 
 The plugin sends the sound out as microphone input, so your computer needs an input that records your speakers (Stereo Mix, VB-Cable, BlackHole, a Linux monitor). **[docs/audio-setup.md](docs/audio-setup.md)** compares the options. In short: Stereo Mix is the quick start but leaks your video or music into your voice, and VB-Cable (Windows) or BlackHole (macOS) keeps only the soundboard in.
@@ -63,6 +72,7 @@ What has been tested, and what has not:
 
 | Installer | Windows | macOS / Linux |
 |---|---|---|
+| One-command uninstall | ✅ Tested on a throwaway copy of the folder layout. Not run against a real Discord yet | ⬜ Not tested |
 | One-command Vencord install | ✅ Download, build and plugin install tested. Injecting into Discord not tested yet | ⬜ Not tested |
 
 "Not tested" means the code is shared and should work, but nobody has confirmed it. Please open an issue with what you find.
@@ -93,6 +103,7 @@ ExternalSoundboard/
 ├── README.md
 ├── LICENSE                                      GPL-3.0
 ├── install.ps1  install.sh  install-windows.bat   one-command Vencord installers
+├── uninstall.ps1  uninstall.sh  uninstall-windows.bat   clean removal
 ├── assets/banner.svg
 ├── docs/
 │   ├── audio-setup.md                           loopback device per OS

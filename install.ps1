@@ -55,6 +55,7 @@ if ($reused) {
     Write-Host "  Vencord already downloaded, reusing it."
 } else {
     Run git $HOME @("clone", "--depth", "1", "https://github.com/Vendicated/Vencord.git", $InstallDir)
+    New-Item (Join-Path $InstallDir ".externalsoundboard-owned") -ItemType File -Force | Out-Null
     $changed = $true
 }
 

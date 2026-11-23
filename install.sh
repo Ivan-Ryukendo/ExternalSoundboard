@@ -42,7 +42,7 @@ elif [ -d "$INSTALL_DIR/.git" ]; then
     [ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" = "$before" ] || changed=1
     echo "  Vencord already downloaded, reusing it."
 else
-    git clone --depth 1 https://github.com/Vendicated/Vencord.git "$INSTALL_DIR"; changed=1
+    git clone --depth 1 https://github.com/Vendicated/Vencord.git "$INSTALL_DIR"; touch "$INSTALL_DIR/.externalsoundboard-owned"; changed=1
 fi
 
 step "Adding the ExternalSoundboard plugin"
