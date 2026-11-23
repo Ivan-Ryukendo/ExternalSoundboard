@@ -73,7 +73,7 @@ What has been tested, and what has not:
 | Installer | Windows | macOS / Linux |
 |---|---|---|
 | One-command uninstall | ✅ Tested on a throwaway copy of the folder layout. Not run against a real Discord yet | ⬜ Not tested |
-| One-command Vencord install | ✅ Download, build and plugin install tested. Injecting into Discord not tested yet | ⬜ Not tested |
+| One-command Vencord install | ✅ Tested end to end on Stable Discord (download, build, plugin, patch, re-run skips what is done) | ⬜ Not tested |
 
 "Not tested" means the code is shared and should work, but nobody has confirmed it. Please open an issue with what you find.
 
@@ -83,7 +83,9 @@ What has been tested, and what has not:
 - [x] BetterDiscord port written
 - [x] One-command installers written (Windows, macOS, Linux)
 - [x] BetterDiscord plugin tested on Windows
-- [ ] Test the installer end to end (including Discord injection)
+- [x] Installer tested end to end on Windows (including Discord injection)
+- [x] Uninstallers (Windows tested on a copy of the folder layout, macOS and Linux not tested)
+- [ ] Test the uninstaller against a real Discord
 - [ ] Test on macOS and Linux
 - [x] Decided against the BetterDiscord store and upstream Vencord: their rules forbid Nitro workarounds and AI-written code, so this repo is the home
 - [ ] Ideas: push-to-talk support, hearing the sound without a local echo, a settings option to turn off the level probe
