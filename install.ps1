@@ -17,7 +17,9 @@ function Fail($msg) { Write-Host "`n$msg" -ForegroundColor Red; exit 1 }
 function Step($msg) { Write-Host "`n==> $msg" -ForegroundColor Cyan }
 function Run($exe, $dir, [string[]]$a) {
     Push-Location $dir
-    try { & $exe @a; if ($LASTEXITCODE) { throw "'$exe $($a -join ' ')' failed (exit $LASTEXITCODE)" } } finally { Pop-Location }
+    # git and npm write progress to stderr; with ErrorActionPreference=Stop PowerShell 5.1 would treat that as a failure
+    $prev = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try { & $exe @a; if ($LASTEXITCODE) { throw "'$exe $($a -join ' ')' failed (exit $LASTEXITCODE)" } } finally { $ErrorActionPreference = $prev; Pop-Location }
 }
 
 Step "Checking requirements"
