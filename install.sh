@@ -6,6 +6,7 @@
 # Options (env vars): INSTALL_DIR=<path>  BRANCH=stable,canary,ptb,auto  SKIP_INJECT=1
 set -euo pipefail
 
+INSTALL_DIR_SET="${INSTALL_DIR:-}"
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Vencord-ExternalSoundboard}"
 BRANCH="${BRANCH:-}"
 RAW="https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main"
@@ -22,11 +23,26 @@ command -v node >/dev/null && node_major=$(node --version | sed -E 's/^v([0-9]+)
 [ -z "$missing" ] || { printf '\033[33m%b\033[0m' "$missing"; fail "Install the above, open a NEW terminal, and run this installer again."; }
 echo "  git and node $(node --version) found. pnpm is fetched automatically."
 
-step "Getting Vencord ($INSTALL_DIR)"
-if [ -d "$INSTALL_DIR/.git" ]; then
+step "Getting Vencord"
+# A Vencord source checkout you already have is reused as is (never re-cloned or pulled). The ready-made
+# Vencord from vencord.dev has no source, so a custom plugin can't be added to it: we need a checkout.
+is_vencord_src() { [ -f "$1/scripts/runInstaller.mjs" ] && grep -q '"name": "vencord"' "$1/package.json" 2>/dev/null; }
+reused=""
+if [ -z "${INSTALL_DIR_SET:-}" ] && [ ! -d "$INSTALL_DIR/.git" ]; then
+    for c in "$HOME/Vencord" "$HOME/Documents/Vencord" "$HOME/Desktop/Vencord" "$HOME/Downloads/Vencord" "$HOME/dev/Vencord"; do
+        if is_vencord_src "$c"; then INSTALL_DIR="$c"; reused=1; break; fi
+    done
+fi
+changed=""
+if [ -n "$reused" ]; then
+    echo "  Using your existing Vencord source: $INSTALL_DIR (not re-downloaded)"
+elif [ -d "$INSTALL_DIR/.git" ]; then
+    before=$(git -C "$INSTALL_DIR" rev-parse HEAD)
     git -C "$INSTALL_DIR" pull --ff-only || echo "  could not update Vencord, building the version you have"
+    [ "$(git -C "$INSTALL_DIR" rev-parse HEAD)" = "$before" ] || changed=1
+    echo "  Vencord already downloaded, reusing it."
 else
-    git clone --depth 1 https://github.com/Vendicated/Vencord.git "$INSTALL_DIR"
+    git clone --depth 1 https://github.com/Vendicated/Vencord.git "$INSTALL_DIR"; changed=1
 fi
 
 step "Adding the ExternalSoundboard plugin"
@@ -34,20 +50,29 @@ dest="$INSTALL_DIR/src/userplugins/externalSoundboard"
 mkdir -p "$dest"
 here="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
 for f in index.tsx settings.tsx; do
-    if [ -n "$here" ] && [ -f "$here/vencord/externalSoundboard/$f" ]; then cp "$here/vencord/externalSoundboard/$f" "$dest/$f"
-    else curl -fsSL "$RAW/vencord/externalSoundboard/$f" -o "$dest/$f"; fi
+    tmp="$(mktemp)"
+    if [ -n "$here" ] && [ -f "$here/vencord/externalSoundboard/$f" ]; then cp "$here/vencord/externalSoundboard/$f" "$tmp"
+    else curl -fsSL "$RAW/vencord/externalSoundboard/$f" -o "$tmp"; fi
+    cmp -s "$tmp" "$dest/$f" || { changed=1; mv "$tmp" "$dest/$f"; }
+    rm -f "$tmp"
 done
 
-step "Building Vencord (a few minutes the first time)"
-# the repo pins its pnpm version. Install exactly that into a private folder and run its .mjs with node,
-# so no global pnpm is needed and broken launcher shims are avoided.
-pnpm_ver=$(node -p "require('$INSTALL_DIR/package.json').packageManager.replace(/^pnpm@/, '').replace(/\+.*/, '')")
-tool="$INSTALL_DIR/.pnpm-tool"
-pnpm_mjs="$tool/node_modules/pnpm/bin/pnpm.mjs"
-[ -f "$pnpm_mjs" ] || npm install --prefix "$tool" "pnpm@$pnpm_ver" --no-audit --no-fund --loglevel=error
 cd "$INSTALL_DIR"
-node "$pnpm_mjs" install --frozen-lockfile
-node "$pnpm_mjs" build
+if [ -z "$changed" ] && [ -f dist/patcher.js ]; then
+    printf '
+[32mPlugin and Vencord are already up to date, no rebuild needed.[0m
+'
+else
+    step "Building Vencord (a few minutes the first time)"
+    # the repo pins its pnpm version. Install exactly that into a private folder and run its .mjs with node,
+    # so no global pnpm is needed and broken launcher shims are avoided.
+    pnpm_ver=$(node -p "require('$INSTALL_DIR/package.json').packageManager.replace(/^pnpm@/, '').replace(/\+.*/, '')")
+    tool="$INSTALL_DIR/.pnpm-tool"
+    pnpm_mjs="$tool/node_modules/pnpm/bin/pnpm.mjs"
+    [ -f "$pnpm_mjs" ] || npm install --prefix "$tool" "pnpm@$pnpm_ver" --no-audit --no-fund --loglevel=error
+    node "$pnpm_mjs" install --frozen-lockfile
+    node "$pnpm_mjs" build
+fi
 
 [ -z "${SKIP_INJECT:-}" ] || { printf '\n\033[32mBuilt. Skipped injecting into Discord (SKIP_INJECT).\033[0m\n'; exit 0; }
 

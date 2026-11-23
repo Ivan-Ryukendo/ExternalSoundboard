@@ -19,6 +19,8 @@ Needs [Git](https://git-scm.com) and [Node.js 22+](https://nodejs.org). The inst
 | **Windows** | Download [`install-windows.bat`](install-windows.bat) and double-click it. Or paste in PowerShell:<br>`irm https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/install.ps1 \| iex` |
 | **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/install.sh \| bash` |
 
+Already have a Vencord source folder (for example `~/Vencord`)? The installer finds and reuses it, and it skips the rebuild and the Discord patch when nothing changed. The ready-made Vencord from vencord.dev has no source code, so it can't take a custom plugin. This installer builds a copy that can.
+
 Then restart Discord and enable **ExternalSoundboard** in *Settings > Vencord > Plugins*. Run the same command again later to update. Prefer to do it by hand? See [docs/install-vencord.md](docs/install-vencord.md).
 
 ### BetterDiscord

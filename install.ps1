@@ -34,11 +34,28 @@ if ($missing) {
 }
 Write-Host "  git and node $(node --version) found. pnpm is fetched automatically."
 
-Step "Getting Vencord ($InstallDir)"
-if (Test-Path (Join-Path $InstallDir ".git")) {
+Step "Getting Vencord"
+# A Vencord source checkout you already have is reused as is (never re-cloned or pulled). The ready-made
+# Vencord from vencord.dev has no source, so a custom plugin can't be added to it: we need a checkout.
+function IsVencordSource($d) {
+    try { (Test-Path (Join-Path $d "scripts\runInstaller.mjs")) -and ((Get-Content (Join-Path $d "package.json") -Raw | ConvertFrom-Json).name -eq "vencord") } catch { $false }
+}
+if (-not $PSBoundParameters.ContainsKey("InstallDir") -and -not (Test-Path (Join-Path $InstallDir ".git"))) {
+    $found = "Vencord", "Documents\Vencord", "Desktop\Vencord", "Downloads\Vencord", "source\repos\Vencord", "dev\Vencord" |
+        ForEach-Object { Join-Path $HOME $_ } | Where-Object { IsVencordSource $_ } | Select-Object -First 1
+    if ($found) { $InstallDir = $found; $reused = $true }
+}
+$changed = $false
+if ($reused) {
+    Write-Host "  Using your existing Vencord source: $InstallDir (not re-downloaded)"
+} elseif (Test-Path (Join-Path $InstallDir ".git")) {
+    $before = (& git -C $InstallDir rev-parse HEAD)
     try { Run git $InstallDir @("pull", "--ff-only") } catch { Write-Host "  could not update Vencord, building the version you have" -ForegroundColor Yellow }
+    if ((& git -C $InstallDir rev-parse HEAD) -ne $before) { $changed = $true }
+    Write-Host "  Vencord already downloaded, reusing it."
 } else {
     Run git $HOME @("clone", "--depth", "1", "https://github.com/Vendicated/Vencord.git", $InstallDir)
+    $changed = $true
 }
 
 Step "Adding the ExternalSoundboard plugin"
@@ -46,19 +63,37 @@ $dest = Join-Path $InstallDir "src\userplugins\externalSoundboard"
 New-Item -ItemType Directory -Force $dest | Out-Null
 $local = if ($PSScriptRoot) { Join-Path $PSScriptRoot "vencord\externalSoundboard" } else { "" }
 foreach ($f in "index.tsx", "settings.tsx") {
+    $target = Join-Path $dest $f
+    $old = if (Test-Path $target) { (Get-FileHash $target).Hash } else { "" }
     if ($local -and (Test-Path (Join-Path $local $f))) { Copy-Item (Join-Path $local $f) $dest -Force }
-    else { Invoke-WebRequest "$raw/vencord/externalSoundboard/$f" -OutFile (Join-Path $dest $f) -UseBasicParsing }
+    else { Invoke-WebRequest "$raw/vencord/externalSoundboard/$f" -OutFile $target -UseBasicParsing }
+    if ((Get-FileHash $target).Hash -ne $old) { $changed = $true }
 }
 
-Step "Building Vencord (a few minutes the first time)"
-# the repo pins its pnpm version. Install exactly that into a private folder and run its .mjs with node:
-# the npx/global launcher shims for pnpm 12 are broken on some Windows setups, the .mjs entry is not.
-$pnpmVer = ((Get-Content (Join-Path $InstallDir "package.json") -Raw | ConvertFrom-Json).packageManager) -replace '^pnpm@', '' -replace '\+.*$', ''
-$tool = Join-Path $InstallDir ".pnpm-tool"
-$pnpmMjs = Join-Path $tool "node_modules\pnpm\bin\pnpm.mjs"
-if (-not (Test-Path $pnpmMjs)) { Run npm $HOME @("install", "--prefix", $tool, "pnpm@$pnpmVer", "--no-audit", "--no-fund", "--loglevel=error") }
-Run node $InstallDir @($pnpmMjs, "install", "--frozen-lockfile")
-Run node $InstallDir @($pnpmMjs, "build")
+if (-not $changed -and (Test-Path (Join-Path $InstallDir "dist\patcher.js"))) {
+    Write-Host "`nPlugin and Vencord are already up to date, no rebuild needed." -ForegroundColor Green
+} else {
+    Step "Building Vencord (a few minutes the first time)"
+    # the repo pins its pnpm version. Install exactly that into a private folder and run its .mjs with node:
+    # the npx/global launcher shims for pnpm 12 are broken on some Windows setups, the .mjs entry is not.
+    $pnpmVer = ((Get-Content (Join-Path $InstallDir "package.json") -Raw | ConvertFrom-Json).packageManager) -replace '^pnpm@', '' -replace '\+.*$', ''
+    $tool = Join-Path $InstallDir ".pnpm-tool"
+    $pnpmMjs = Join-Path $tool "node_modules\pnpm\bin\pnpm.mjs"
+    if (-not (Test-Path $pnpmMjs)) { Run npm $HOME @("install", "--prefix", $tool, "pnpm@$pnpmVer", "--no-audit", "--no-fund", "--loglevel=error") }
+    Run node $InstallDir @($pnpmMjs, "install", "--frozen-lockfile")
+    Run node $InstallDir @($pnpmMjs, "build")
+}
+
+# true when this Discord already loads the Vencord build in $InstallDir (its app.asar names our dist folder)
+function AlreadyPatched($b) {
+    $dir = @{ stable = "Discord"; canary = "DiscordCanary"; ptb = "DiscordPTB" }[$b]
+    if (-not $dir) { return $false }
+    $needle = (Join-Path $InstallDir "dist\patcher.js").Replace("\", "\\")
+    Get-ChildItem (Join-Path $env:LOCALAPPDATA $dir) -Directory -Filter "app-*" -ErrorAction SilentlyContinue | ForEach-Object {
+        $asar = Join-Path $_.FullName "resources\app.asar"
+        if ((Test-Path $asar) -and ([Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes($asar))).Contains($needle)) { return $true }
+    } | Select-Object -First 1
+}
 
 if ($SkipInject) { Write-Host "`nBuilt. Skipped injecting into Discord (-SkipInject)." -ForegroundColor Green; exit 0 }
 
@@ -72,7 +107,10 @@ if (-not $Branch) {
 if (-not $Branch) { Write-Host "  Skipped. Later, run:  node scripts/runInstaller.mjs -- -install -branch <stable|canary|ptb>  in $InstallDir" }
 else {
     Write-Host "  Close Discord first (right-click its tray icon > Quit)." -ForegroundColor Yellow
-    foreach ($b in $Branch -split ",") { Step "Injecting into Discord $b"; Run node $InstallDir @("scripts/runInstaller.mjs", "--", "-install", "-branch", $b) }
+    foreach ($b in $Branch -split ",") {
+        if (AlreadyPatched $b) { Write-Host "`nDiscord $b already uses this Vencord, nothing to inject." -ForegroundColor Green; continue }
+        Step "Injecting into Discord $b"; Run node $InstallDir @("scripts/runInstaller.mjs", "--", "-install", "-branch", $b)
+    }
 }
 
 Write-Host "`nDone." -ForegroundColor Green
