@@ -2,8 +2,9 @@
 # ExternalSoundboard uninstaller (macOS and Linux).
 # One line:
 #   curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.sh | bash
-# Options (env vars): MODE=plugin|vencord  INSTALL_DIR=<path>  BRANCH=stable,canary,ptb  DELETE_DATA=1  YES=1
-# Untested on macOS and Linux. BetterDiscord itself is removed with BetterDiscord's own installer (Uninstall).
+# Options (env vars): MODE=plugin|vencord|betterdiscord|all  INSTALL_DIR=<path>  BRANCH=stable,canary,ptb  DELETE_DATA=1  YES=1
+#   DISCORD_RESOURCES=<dir>[:<dir>]  extra Discord 'resources' folders to check for BetterDiscord
+# Untested on macOS and Linux.
 set -euo pipefail
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/Vencord-ExternalSoundboard}"
@@ -21,10 +22,15 @@ if [ -z "$MODE" ]; then
     echo "What do you want to remove?"
     echo "  1) The plugin only             (keeps Vencord / BetterDiscord)"
     echo "  2) The plugin + Vencord        (un-patches Discord, deletes the Vencord copy the installer made)"
+    echo "  3) The plugin + BetterDiscord  (un-patches Discord)"
+    echo "  4) Everything"
     read -r -p "  Your choice: " c < /dev/tty || c=""
-    case "$c" in 1) MODE=plugin;; 2) MODE=vencord;; *) echo "Nothing selected, nothing changed."; exit 0;; esac
+    case "$c" in 1) MODE=plugin;; 2) MODE=vencord;; 3) MODE=betterdiscord;; 4) MODE=all;; *) echo "Nothing selected, nothing changed."; exit 0;; esac
 fi
-[ "$MODE" = plugin ] || [ "$MODE" = vencord ] || fail "MODE must be plugin or vencord."
+case "$MODE" in plugin|vencord|betterdiscord|all) ;; *) fail "MODE must be plugin, vencord, betterdiscord or all.";; esac
+do_vencord=""; do_bd=""
+{ [ "$MODE" = vencord ] || [ "$MODE" = all ]; } && do_vencord=1
+{ [ "$MODE" = betterdiscord ] || [ "$MODE" = all ]; } && do_bd=1
 pgrep -xi 'discord|discordcanary|discordptb' >/dev/null 2>&1 && fail "Quit Discord first, then run this again."
 [ -n "${YES:-}" ] || yesno "Remove ($MODE)?" || { echo "Cancelled, nothing changed."; exit 0; }
 
@@ -34,13 +40,27 @@ for c in "$INSTALL_DIR" "$HOME/Vencord" "$HOME/Documents/Vencord" "$HOME/Desktop
 done
 
 # 1. un-patch Discord first: deleting Vencord's folder while Discord still loads it would break Discord
-if [ "$MODE" = vencord ]; then
+if [ -n "$do_vencord" ]; then
     step "Removing Vencord from Discord"
     [ "${#checkouts[@]}" -gt 0 ] || fail "No Vencord source folder found, so Discord can't be un-patched from here. Set INSTALL_DIR=<folder>."
     if [ -z "${BRANCH:-}" ]; then
         read -r -p "  Which Discord? stable, canary, ptb (comma separated): " BRANCH < /dev/tty || BRANCH=""
     fi
     for b in ${BRANCH//,/ }; do (cd "${checkouts[0]}" && node scripts/runInstaller.mjs -- -uninstall -branch "$b"); removed+=("Vencord patch ($b)"); done
+fi
+
+if [ -n "$do_bd" ]; then
+    step "Removing BetterDiscord from Discord"
+    # BetterDiscord adds resources/app/index.js and renames Discord's app.asar to betterdiscord.app.asar
+    cands=()
+    IFS=: read -r -a extra <<< "${DISCORD_RESOURCES:-}"
+    cands+=("${extra[@]-}")
+    for d in "/Applications/Discord.app" "/Applications/Discord Canary.app" "/Applications/Discord PTB.app"; do cands+=("$d/Contents/Resources"); done
+    for d in /opt/discord /opt/discord-canary /opt/discord-ptb /usr/share/discord /usr/share/discord-canary /usr/share/discord-ptb /usr/lib/discord /usr/lib/discord-canary /usr/lib/discord-ptb              /var/lib/flatpak/app/com.discordapp.Discord/current/active/files/discord "$HOME/.local/share/flatpak/app/com.discordapp.Discord/current/active/files/discord" /snap/discord/current/usr/share/discord; do cands+=("$d/resources"); done
+    for res in "${cands[@]}"; do
+        [ -n "$res" ] && [ -f "$res/app/index.js" ] && [ -f "$res/betterdiscord.app.asar" ] && grep -q BetterDiscord "$res/app/index.js" || continue
+        { rm -rf "$res/app" && { if [ -e "$res/app.asar" ]; then rm -f "$res/betterdiscord.app.asar"; else mv "$res/betterdiscord.app.asar" "$res/app.asar"; fi; }; }             && removed+=("BetterDiscord patch in $res") || echo "  Could not change $res (permission denied?). Run this again with sudo." >&2
+    done
 fi
 
 # 2. the plugin
@@ -58,15 +78,17 @@ fi
 
 # 3. Vencord copies: delete ours, tell the user to rebuild the others
 for c in "${checkouts[@]}"; do
-    if [ "$MODE" = vencord ] && is_owned "$c"; then rm -rf "$c"; removed+=("Vencord copy $c")
+    if [ -n "$do_vencord" ] && is_owned "$c"; then rm -rf "$c"; removed+=("Vencord copy $c")
     elif [ -f "$c/dist/patcher.js" ]; then echo "  Rebuild $c (pnpm build) so Vencord stops loading the plugin."; fi
 done
 
-if [ "$MODE" = vencord ] && [ -d "$cfg/Vencord" ]; then
+if [ -n "$do_vencord" ] && [ -d "$cfg/Vencord" ]; then
     if [ -n "${DELETE_DATA:-}" ] || { [ -z "${YES:-}" ] && yesno "Also delete your Vencord settings and themes ($cfg/Vencord)?"; }; then rm -rf "$cfg/Vencord"; removed+=("$cfg/Vencord"); fi
+fi
+if [ -n "$do_bd" ] && [ -d "$cfg/BetterDiscord" ]; then
+    if [ -n "${DELETE_DATA:-}" ] || { [ -z "${YES:-}" ] && yesno "Also delete BetterDiscord's folder, with your other plugins and themes ($cfg/BetterDiscord)?"; }; then rm -rf "$cfg/BetterDiscord"; removed+=("$cfg/BetterDiscord"); fi
 fi
 
 printf '\n\033[32mDone.\033[0m\n'
 [ "${#removed[@]}" -gt 0 ] && printf '  removed: %s\n' "${removed[@]}" || echo "  Nothing to remove was found."
-echo "  To remove BetterDiscord itself, run BetterDiscord's installer and choose Uninstall."
 echo "  Start Discord again."

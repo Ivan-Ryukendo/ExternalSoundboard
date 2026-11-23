@@ -37,7 +37,7 @@ Close Discord, then run the uninstaller. It asks what to remove: the plugin only
 | OS | Run this |
 |---|---|
 | **Windows** | Double-click [`uninstall-windows.bat`](uninstall-windows.bat), or in PowerShell:<br>`irm https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.ps1 \| iex` |
-| **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.sh \| bash` (removes the plugin and Vencord; for BetterDiscord itself use its own installer's Uninstall) |
+| **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/uninstall.sh \| bash` (same menu; untested on macOS and Linux) |
 
 ### Last step for both: a loopback audio device
 
