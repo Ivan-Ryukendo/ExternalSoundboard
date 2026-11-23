@@ -16,22 +16,23 @@ const toggleMute = () => FluxDispatcher.dispatch({ type: "AUDIO_TOGGLE_SELF_MUTE
 
 // Krisp noise cancellation, echo cancellation, auto gain and the speech-detecting mic gate treat a sound effect as noise and
 // cut or stutter it. Apply a target set of voice settings, touching only what differs so the voice engine isn't restarted for nothing.
-const M = MediaEngineStore as any;
+// read the store at call time: @webpack/common fills in MediaEngineStore after this module loads, so a top-level copy would be undefined
+const M = () => MediaEngineStore as any;
 const VOICE_BACKUP = "ExternalSoundboard_voiceBackup";
 
 function setVoice(t: any) {
     const d = (a: object) => FluxDispatcher.dispatch({ ...a, location: "ExternalSoundboard" } as any);
-    if (t.nc !== M.getNoiseCancellation()) d({ type: "AUDIO_SET_NOISE_CANCELLATION", enabled: t.nc });
-    if (t.ns !== M.getNoiseSuppression()) d({ type: "AUDIO_SET_NOISE_SUPPRESSION", enabled: t.ns });
-    if (t.ec !== M.getEchoCancellation()) d({ type: "AUDIO_SET_ECHO_CANCELLATION", enabled: t.ec });
-    if (t.agc !== M.getAutomaticGainControl()) d({ type: "AUDIO_SET_AUTOMATIC_GAIN_CONTROL", enabled: t.agc });
-    if (t.mode !== M.getMode() || JSON.stringify(t.options) !== JSON.stringify(M.getModeOptions())) {
+    if (t.nc !== M().getNoiseCancellation()) d({ type: "AUDIO_SET_NOISE_CANCELLATION", enabled: t.nc });
+    if (t.ns !== M().getNoiseSuppression()) d({ type: "AUDIO_SET_NOISE_SUPPRESSION", enabled: t.ns });
+    if (t.ec !== M().getEchoCancellation()) d({ type: "AUDIO_SET_ECHO_CANCELLATION", enabled: t.ec });
+    if (t.agc !== M().getAutomaticGainControl()) d({ type: "AUDIO_SET_AUTOMATIC_GAIN_CONTROL", enabled: t.agc });
+    if (t.mode !== M().getMode() || JSON.stringify(t.options) !== JSON.stringify(M().getModeOptions())) {
         FluxDispatcher.dispatch({ type: "AUDIO_SET_MODE", context: "default", mode: t.mode, options: t.options } as any);
     }
 }
 
 async function bypassVoice() {
-    const saved = { nc: M.getNoiseCancellation(), ns: M.getNoiseSuppression(), ec: M.getEchoCancellation(), agc: M.getAutomaticGainControl(), mode: M.getMode(), options: M.getModeOptions() };
+    const saved = { nc: M().getNoiseCancellation(), ns: M().getNoiseSuppression(), ec: M().getEchoCancellation(), agc: M().getAutomaticGainControl(), mode: M().getMode(), options: M().getModeOptions() };
     // saved to disk first: if Discord dies mid-sound, start() puts the settings back
     await set(VOICE_BACKUP, saved);
     // voice activity with the gate wide open also lets sounds through when you normally use push-to-talk
