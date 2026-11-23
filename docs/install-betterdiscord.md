@@ -1,6 +1,6 @@
 # Install with BetterDiscord
 
-**Status: not yet tested.** The BetterDiscord version is a port of the tested Vencord plugin. It finds Discord's internals through BetterDiscord's webpack API instead of build-time patches, so a hook can come up missing after a Discord update. The plugin logs which hooks it attached and shows an error toast if the basics are missing.
+**Status: tested on Windows only.** The BetterDiscord version is a port of the Vencord plugin. It finds Discord's internals through BetterDiscord's webpack API instead of build-time patches, so a hook can come up missing after a Discord update. The plugin logs which hooks it attached and shows an error toast if the basics are missing.
 
 1. Install [BetterDiscord](https://betterdiscord.app) (Windows, macOS and Linux desktop only).
 2. Copy `betterdiscord/ExternalSoundboard.plugin.js` into the plugins folder:

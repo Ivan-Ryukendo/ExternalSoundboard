@@ -69,6 +69,11 @@ export const settings = definePluginSettings({
                 value={settings.store.playbackOutput} onChange={v => { settings.store.playbackOutput = v; setValue(v); }} />;
         }, { noop: true })
     },
+    bypassVoiceProcessing: {
+        type: OptionType.BOOLEAN,
+        description: "Bypass voice processing while a sound plays (noise cancellation, echo cancellation, auto gain, mic gate), then put it back. Fixes cut-off and stuttering sounds",
+        default: true
+    },
     settleMs: {
         type: OptionType.NUMBER,
         description: "Wait after switching the input device, in ms",

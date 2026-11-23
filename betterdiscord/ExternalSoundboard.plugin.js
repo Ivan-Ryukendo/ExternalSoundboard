@@ -11,14 +11,17 @@ const NITRO_REQUIRED = 20015;
 const TAIL_MS = 150;
 // Stereo Mix (Windows), BlackHole / VB-Cable (macOS, Windows), "Monitor of ..." (Linux PulseAudio/PipeWire)
 const LOOPBACK_NAME = /stereo mix|what u hear|loopback|blackhole|cable output|monitor of/i;
-const DEFAULTS = { loopbackInput: "", micInput: "", playbackOutput: "", settleMs: 400 };
+const DEFAULTS = { loopbackInput: "", micInput: "", playbackOutput: "", settleMs: 400, bypassVoiceProcessing: true };
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const log = (...a) => BdApi.Logger.info(NAME, ...a);
-const warn = (...a) => BdApi.Logger.warn(NAME, ...a);
+// BetterDiscord prints objects as [object Object], so stringify them
+const fmt = a => a.map(x => typeof x === "string" ? x : x instanceof Error ? x.stack : JSON.stringify(x));
+const log = (...a) => BdApi.Logger.info(NAME, ...fmt(a));
+const warn = (...a) => BdApi.Logger.warn(NAME, ...fmt(a));
 
 module.exports = class ExternalSoundboard {
     busy = false;
+    relocked = new Set();
 
     start() {
         const { Webpack, Patcher } = BdApi;
@@ -26,15 +29,46 @@ module.exports = class ExternalSoundboard {
         this.Media = Webpack.getStore("MediaEngineStore");
         this.Users = Webpack.getStore("UserStore");
         this.Channels = Webpack.getStore("ChannelStore");
-        this.Dispatcher = Webpack.getByKeys("dispatch", "subscribe", "unsubscribe");
-        if (!this.Media || !this.Users || !this.Channels || !this.Dispatcher) {
-            return BdApi.UI.showToast(`${NAME}: could not find Discord's internals, Discord may have changed`, { type: "error" });
+        // the dispatcher is an export of a larger module, so getByKeys misses it; _actionHandlers tells it apart from look-alikes
+        this.Dispatcher = Webpack.getModule(m => m && typeof m.dispatch === "function" && typeof m.subscribe === "function" && "_actionHandlers" in m, { searchExports: true });
+        const missing = Object.entries({ MediaEngineStore: this.Media, UserStore: this.Users, ChannelStore: this.Channels, FluxDispatcher: this.Dispatcher }).filter(([, v]) => !v).map(([k]) => k);
+        if (missing.length) {
+            warn("could not find", missing.join(", "));
+            return BdApi.UI.showToast(`${NAME}: could not find ${missing.join(", ")}, Discord may have changed`, { type: "error" });
         }
+        this.refreshOutputs();
+        this.restoreVoice(); // repairs voice settings if Discord closed mid-sound last time
 
         // 1. make locked sounds clickable
+        // Discord freezes this object, so Patcher can't touch it; swap the module export that holds it for an unlocked copy instead
         const premium = Webpack.getByKeys("canUseSoundboardEverywhere");
-        if (premium) Patcher.instead(NAME, premium, "canUseSoundboardEverywhere", () => true);
-        else warn("canUseSoundboardEverywhere not found, locked sounds stay locked");
+        const premMod = premium && Webpack.getModule(m => m === premium, { searchExports: true, raw: true });
+        const premKey = premMod && Object.keys(premMod.exports).find(k => premMod.exports[k] === premium);
+        if (premKey) {
+            const original = Object.getOwnPropertyDescriptor(premMod.exports, premKey);
+            // The picker also greys out other servers (lock icons, "Get Nitro" bar) via isPremium(user, TIER_2). That check is used all over
+            // Discord, so only answer "yes" when the caller is the sound picker's own module (found by a string that only it contains).
+            const pickerId = Webpack.getModule(Webpack.Filters.bySource("lockedCustomSoundCount"), { raw: true })?.id;
+            const inPicker = () => pickerId != null && new Error().stack.includes(`${pickerId}.js`);
+            const unlocked = {
+                ...premium,
+                canUseSoundboardEverywhere: () => true,
+                isPremium: (user, tier, ...rest) => (tier === 2 && inPicker()) || premium.isPremium(user, tier, ...rest)
+            };
+            Object.defineProperty(premMod.exports, premKey, { ...original, get: () => unlocked });
+            this.restorePremium = () => Object.defineProperty(premMod.exports, premKey, original);
+        } else warn("canUseSoundboardEverywhere not found, locked sounds stay locked");
+
+        // 1b. sounds past their server's boost slots are flagged unavailable (a lock "Requires higher Server Boost Level"), but the CDN still serves them
+        const Sounds = Webpack.getStore("SoundboardStore");
+        if (Sounds) {
+            const unlock = s => { if (s && s.available === false && s.guildId !== "0") { s.available = true; this.relocked.add(s); } };
+            Patcher.after(NAME, Sounds, "getSoundById", (_, __, ret) => { unlock(ret); });
+            Patcher.after(NAME, Sounds, "getSoundsForGuild", (_, __, ret) => { ret?.forEach?.(unlock); });
+            Patcher.after(NAME, Sounds, "getSounds", (_, __, ret) => { ret?.forEach?.(list => list?.forEach?.(unlock)); });
+            Sounds.getSounds().forEach(list => list.forEach(unlock));
+            Sounds.emitChange?.();
+        } else warn("SoundboardStore not found, boost-locked sounds stay locked");
 
         // 2. skip Discord's own play + request for sounds we handle (no double playback, no 403 wait)
         const [sendMod, sendKey] = Webpack.getWithKey(Webpack.Filters.byStrings("SEND_SOUNDBOARD_SOUND")) ?? [];
@@ -42,7 +76,7 @@ module.exports = class ExternalSoundboard {
         else warn("send-sound function not found, relying on the 403 fallback only");
 
         // 3. fallback: if the server still answers 403 / 20015, play it ourselves
-        const http = Webpack.getByKeys("getAPIBaseURL", "post");
+        const http = Webpack.getByKeys("getXHR", "post");
         if (http) {
             Patcher.instead(NAME, http, "post", (_, args, orig) => {
                 const p = orig(...args);
@@ -57,11 +91,17 @@ module.exports = class ExternalSoundboard {
             });
         } else warn("HTTP module not found, 403 fallback disabled");
 
-        log("started", { nitroPatch: !!premium, interceptPatch: !!sendMod, httpFallback: !!http });
+        log("started", { nitroPatch: !!premKey, interceptPatch: !!sendMod, httpFallback: !!http });
     }
 
     stop() {
         BdApi.Patcher.unpatchAll(NAME);
+        this.restoreVoice();
+        this.restorePremium?.();
+        this.restorePremium = null;
+        this.relocked.forEach(s => { s.available = false; });
+        this.relocked.clear();
+        BdApi.Webpack.getStore("SoundboardStore")?.emitChange?.();
     }
 
     intercept(sound, channelId) {
@@ -82,6 +122,35 @@ module.exports = class ExternalSoundboard {
 
     toggleMute() {
         this.Dispatcher.dispatch({ type: "AUDIO_TOGGLE_SELF_MUTE", context: "default", syncRemote: true, playSoundEffect: false });
+    }
+
+    // Krisp noise cancellation, echo cancellation, auto gain and the speech-detecting mic gate treat a sound effect as noise and
+    // cut or stutter it. Apply a target set of voice settings, touching only what differs so the voice engine isn't restarted for nothing.
+    setVoice(t) {
+        const M = this.Media, d = a => this.Dispatcher.dispatch({ ...a, location: NAME });
+        if (t.nc !== M.getNoiseCancellation()) d({ type: "AUDIO_SET_NOISE_CANCELLATION", enabled: t.nc });
+        if (t.ns !== M.getNoiseSuppression()) d({ type: "AUDIO_SET_NOISE_SUPPRESSION", enabled: t.ns });
+        if (t.ec !== M.getEchoCancellation()) d({ type: "AUDIO_SET_ECHO_CANCELLATION", enabled: t.ec });
+        if (t.agc !== M.getAutomaticGainControl()) d({ type: "AUDIO_SET_AUTOMATIC_GAIN_CONTROL", enabled: t.agc });
+        if (t.mode !== M.getMode() || JSON.stringify(t.options) !== JSON.stringify(M.getModeOptions())) {
+            this.Dispatcher.dispatch({ type: "AUDIO_SET_MODE", context: "default", mode: t.mode, options: t.options });
+        }
+    }
+
+    bypassVoice() {
+        const M = this.Media;
+        const saved = { nc: M.getNoiseCancellation(), ns: M.getNoiseSuppression(), ec: M.getEchoCancellation(), agc: M.getAutomaticGainControl(), mode: M.getMode(), options: M.getModeOptions() };
+        // saved to disk first: if Discord dies mid-sound, start() puts the settings back
+        BdApi.Data.save(NAME, "voiceBackup", saved);
+        // voice activity with the gate wide open also lets sounds through when you normally use push-to-talk
+        this.setVoice({ nc: false, ns: false, ec: false, agc: false, mode: "VOICE_ACTIVITY", options: { ...saved.options, autoThreshold: false, threshold: -100, vadUseKrisp: false } });
+    }
+
+    restoreVoice() {
+        const saved = BdApi.Data.load(NAME, "voiceBackup");
+        if (!saved) return;
+        this.setVoice(saved);
+        BdApi.Data.delete(NAME, "voiceBackup");
     }
 
     // Diagnostic: records the loopback device while the sound plays and reports its peak level (0 = it hears nothing)
@@ -146,6 +215,7 @@ module.exports = class ExternalSoundboard {
             await ctx.resume();
             log("ready", { seconds: src.buffer.duration, ctx: ctx.state, sink: ctx.sinkId });
 
+            if (this.settings.bypassVoiceProcessing) this.bypassVoice();
             this.setInput(loopback.id);
             await sleep(settleMs);
             const stopProbe = await this.probeLevel(loopback.name).catch(e => (warn("probe failed", e), null));
@@ -165,45 +235,41 @@ module.exports = class ExternalSoundboard {
             this.setInput(activeInput);
         } finally {
             if (unmuted) this.toggleMute();
+            this.restoreVoice();
             ctx.close();
             this.busy = false;
         }
     }
 
+    outputNames = [];
+
+    async refreshOutputs() {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        this.outputNames = devs.filter(d => d.kind === "audiooutput" && d.deviceId !== "default" && d.deviceId !== "communications").map(d => d.label);
+        return this.outputNames;
+    }
+
     getSettingsPanel() {
-        const root = document.createElement("div");
-        root.style.cssText = "display:flex;flex-direction:column;gap:16px;color:var(--text-default,#dbdee1)";
-        const save = (key, value) => {
-            this.settings[key] = value;
-            BdApi.Data.save(NAME, "settings", this.settings);
+        const { React, UI, Data } = BdApi;
+        const Panel = () => {
+            const [outputs, setOutputs] = React.useState(this.outputNames);
+            React.useEffect(() => { this.refreshOutputs().then(setOutputs).catch(() => { }); }, []);
+            const inputs = Object.values(this.Media.getInputDevices()).map(d => d.name);
+            const list = (auto, names) => [{ label: auto, value: "" }, ...names.map(n => ({ label: n, value: n }))];
+            return UI.buildSettingsPanel({
+                onChange: (_, id, value) => {
+                    this.settings[id] = id === "settleMs" ? Math.max(0, Number(value) || DEFAULTS.settleMs) : value;
+                    Data.save(NAME, "settings", this.settings);
+                },
+                settings: [
+                    { type: "dropdown", id: "loopbackInput", name: "Loopback input", note: "The input that records your speakers (Stereo Mix, BlackHole, CABLE Output, Monitor of ...).", value: this.settings.loopbackInput, options: list("Auto-detect", inputs) },
+                    { type: "dropdown", id: "micInput", name: "Your microphone", note: "Switched back to this after each sound.", value: this.settings.micInput, options: list("Whatever mic was active", inputs) },
+                    { type: "dropdown", id: "playbackOutput", name: "Playback output", note: "The output the loopback input records. Keep Discord's own output on a different device, or friends hear an echo.", value: this.settings.playbackOutput, options: list("Auto-detect (matches loopback)", outputs) },
+                    { type: "switch", id: "bypassVoiceProcessing", name: "Bypass voice processing while a sound plays", note: "Turns off noise cancellation, echo cancellation, auto gain and the mic gate for the length of the sound, then puts them back. Fixes cut-off and stuttering sounds.", value: this.settings.bypassVoiceProcessing },
+                    { type: "number", id: "settleMs", name: "Settle time (ms)", note: "Wait after switching the input device.", value: this.settings.settleMs, min: 0, step: 50 }
+                ]
+            });
         };
-        const field = (title, note, control) => {
-            const box = document.createElement("div");
-            box.innerHTML = `<div style="font-weight:600"></div><div style="opacity:.7;margin:2px 0 6px"></div>`;
-            box.children[0].textContent = title;
-            box.children[1].textContent = note;
-            box.append(control);
-            root.append(box);
-            return control;
-        };
-        const style = "width:100%;padding:8px;border-radius:4px;border:0;background:var(--input-background-default,#1e1f22);color:inherit";
-        const select = (key, autoLabel, names) => {
-            const el = document.createElement("select");
-            el.style.cssText = style;
-            for (const [label, value] of [[autoLabel, ""], ...names.map(n => [n, n])]) el.add(new Option(label, value, false, value === this.settings[key]));
-            el.onchange = () => save(key, el.value);
-            return el;
-        };
-        const inputs = Object.values(this.Media.getInputDevices()).map(d => d.name);
-        field("Loopback input", "The input that records your speakers (Stereo Mix, BlackHole, CABLE Output, Monitor of ...).", select("loopbackInput", "Auto-detect", inputs));
-        field("Your microphone", "Switched back to this after each sound.", select("micInput", "Whatever mic was active", inputs));
-        const out = field("Playback output", "The output the loopback input records. Keep Discord's own output on a different device, or friends hear an echo.", select("playbackOutput", "Auto-detect (matches loopback)", []));
-        navigator.mediaDevices.enumerateDevices().then(devs => {
-            for (const d of devs) if (d.kind === "audiooutput" && d.deviceId !== "default" && d.deviceId !== "communications") out.add(new Option(d.label, d.label, false, d.label === this.settings.playbackOutput));
-        });
-        const settle = field("Settle time (ms)", "Wait after switching the input device.", Object.assign(document.createElement("input"), { type: "number", value: this.settings.settleMs, min: 0 }));
-        settle.style.cssText = style;
-        settle.onchange = () => save("settleMs", Math.max(0, Number(settle.value) || DEFAULTS.settleMs));
-        return root;
+        return React.createElement(Panel);
     }
 };

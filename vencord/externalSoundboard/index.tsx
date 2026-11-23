@@ -1,4 +1,6 @@
+import { del, get, set } from "@api/DataStore";
 import definePlugin from "@utils/types";
+import { findStoreLazy } from "@webpack";
 import { ChannelStore, FluxDispatcher, MediaEngineStore, UserStore } from "@webpack/common";
 
 import { settings } from "./settings";
@@ -11,6 +13,37 @@ const setInput = (id: string) => FluxDispatcher.dispatch({ type: "AUDIO_SET_INPU
 
 const TAIL_MS = 150;
 const toggleMute = () => FluxDispatcher.dispatch({ type: "AUDIO_TOGGLE_SELF_MUTE", context: "default", syncRemote: true, playSoundEffect: false } as any);
+
+// Krisp noise cancellation, echo cancellation, auto gain and the speech-detecting mic gate treat a sound effect as noise and
+// cut or stutter it. Apply a target set of voice settings, touching only what differs so the voice engine isn't restarted for nothing.
+const M = MediaEngineStore as any;
+const VOICE_BACKUP = "ExternalSoundboard_voiceBackup";
+
+function setVoice(t: any) {
+    const d = (a: object) => FluxDispatcher.dispatch({ ...a, location: "ExternalSoundboard" } as any);
+    if (t.nc !== M.getNoiseCancellation()) d({ type: "AUDIO_SET_NOISE_CANCELLATION", enabled: t.nc });
+    if (t.ns !== M.getNoiseSuppression()) d({ type: "AUDIO_SET_NOISE_SUPPRESSION", enabled: t.ns });
+    if (t.ec !== M.getEchoCancellation()) d({ type: "AUDIO_SET_ECHO_CANCELLATION", enabled: t.ec });
+    if (t.agc !== M.getAutomaticGainControl()) d({ type: "AUDIO_SET_AUTOMATIC_GAIN_CONTROL", enabled: t.agc });
+    if (t.mode !== M.getMode() || JSON.stringify(t.options) !== JSON.stringify(M.getModeOptions())) {
+        FluxDispatcher.dispatch({ type: "AUDIO_SET_MODE", context: "default", mode: t.mode, options: t.options } as any);
+    }
+}
+
+async function bypassVoice() {
+    const saved = { nc: M.getNoiseCancellation(), ns: M.getNoiseSuppression(), ec: M.getEchoCancellation(), agc: M.getAutomaticGainControl(), mode: M.getMode(), options: M.getModeOptions() };
+    // saved to disk first: if Discord dies mid-sound, start() puts the settings back
+    await set(VOICE_BACKUP, saved);
+    // voice activity with the gate wide open also lets sounds through when you normally use push-to-talk
+    setVoice({ nc: false, ns: false, ec: false, agc: false, mode: "VOICE_ACTIVITY", options: { ...saved.options, autoThreshold: false, threshold: -100, vadUseKrisp: false } });
+}
+
+async function restoreVoice() {
+    const saved = await get(VOICE_BACKUP);
+    if (!saved) return;
+    setVoice(saved);
+    await del(VOICE_BACKUP);
+}
 
 // Diagnostic: records the loopback device while the sound plays and reports its peak level (0 = it hears nothing)
 async function probeLevel(label: string) {
@@ -35,12 +68,39 @@ async function probeLevel(label: string) {
 }
 
 let busy = false;
+const Sounds = findStoreLazy("SoundboardStore") as any;
+const relocked = new Set<any>();
+const unwrap: (() => void)[] = [];
 
 export default definePlugin({
     name: "ExternalSoundboard",
     description: "Plays other-server soundboard sounds into your voice chat via Stereo Mix when Discord refuses without Nitro",
     authors: [{ name: "Ivan-Ryukendo", id: 0n }],
     settings,
+
+    start() {
+        restoreVoice(); // repairs voice settings if Discord closed mid-sound last time
+        // Sounds past their server's boost slots are flagged unavailable (a lock "Requires higher Server Boost Level"), but the CDN still serves them
+        const unlock = (s: any) => { if (s && s.available === false && s.guildId !== "0") { s.available = true; relocked.add(s); } };
+        const wrap = (name: string, fn: (ret: any) => void) => {
+            const orig = Sounds[name];
+            Sounds[name] = function (...args: any[]) { const ret = orig.apply(this, args); fn(ret); return ret; };
+            unwrap.push(() => { Sounds[name] = orig; });
+        };
+        wrap("getSoundById", unlock);
+        wrap("getSoundsForGuild", r => r?.forEach?.(unlock));
+        wrap("getSounds", r => r?.forEach?.((list: any[]) => list?.forEach?.(unlock)));
+        Sounds.getSounds().forEach((list: any[]) => list.forEach(unlock));
+        Sounds.emitChange?.();
+    },
+
+    stop() {
+        restoreVoice();
+        unwrap.splice(0).forEach(f => f());
+        relocked.forEach(s => { s.available = false; });
+        relocked.clear();
+        Sounds.emitChange?.();
+    },
 
     intercept(sound: { soundId: string; guildId: string; }, channelId: string) {
         try {
@@ -98,6 +158,7 @@ export default definePlugin({
             await ctx.resume();
             console.log("[ExternalSoundboard] ready", JSON.stringify({ seconds: src.buffer.duration, ctx: ctx.state, sink: (ctx as any).sinkId }));
 
+            if (settings.store.bypassVoiceProcessing) await bypassVoice();
             setInput(loopback.id);
             await sleep(settleMs);
             const stopProbe = await probeLevel(loopback.name).catch(e => (console.warn("[ExternalSoundboard] probe failed", e), null));
@@ -117,12 +178,21 @@ export default definePlugin({
             setInput(activeInput);
         } finally {
             if (unmuted) toggleMute();
+            await restoreVoice();
             ctx.close();
             busy = false;
         }
     },
 
     patches: [
+        {
+            // The picker greys out other servers (lock icons, "Get Nitro" bar) via isPremium / isPremiumAtLeast(user, TIER_2); say yes in this module only
+            find: "lockedCustomSoundCount",
+            replacement: {
+                match: /\i\.\i\.isPremium\(\i,\i\.PremiumTypes\.TIER_2\)|\(0,\i\.\i\)\(\i,\i\.PremiumTypes\.TIER_2\)/g,
+                replace: "true"
+            }
+        },
         {
             find: "canUseCustomStickersEverywhere:",
             replacement: {

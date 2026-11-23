@@ -1,4 +1,6 @@
-# Install with Vencord
+# Install with Vencord (manual)
+
+The one-command installers in the [README](../README.md#vencord-one-command) do all of this for you. Use this page if you want to do it by hand.
 
 Custom plugins need Vencord **built from source**; the prebuilt installer cannot load them. Works the same on Windows, macOS and Linux. You need [Git](https://git-scm.com), [Node.js](https://nodejs.org) 18+ and [pnpm](https://pnpm.io).
 

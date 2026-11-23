@@ -1,61 +1,103 @@
-# ExternalSoundboard
+<p align="center">
+  <img src="assets/banner.svg" alt="ExternalSoundboard: play any server's soundboard sounds, no Nitro needed" width="100%">
+</p>
 
-Play soundboard sounds from **other servers** in a voice call **without Nitro**, and have everyone in the call actually hear them. Available as a **Vencord** userplugin and as a **BetterDiscord** plugin, with the same logic.
+Play soundboard sounds from **other servers** in a voice call **without Nitro**, and have everyone in the call actually hear them. Available for **Vencord** and **BetterDiscord**, with the same logic in both.
 
 > **Risk:** this works around a paid Discord feature. Client mods already go against Discord's Terms of Service, and this goes a step further. Use it at your own risk; your account could be actioned.
 
+## Quick install
+
+Pick your client. Close Discord first. Each installer checks what you have, tells you what is missing, and does the rest.
+
+### Vencord (one command)
+
+Needs [Git](https://git-scm.com) and [Node.js 22+](https://nodejs.org). The installer downloads and builds Vencord for you (custom plugins can't use Vencord's normal installer), adds this plugin, and asks which Discord to patch: **Stable, Canary, PTB**, or several.
+
+| OS | Run this |
+|---|---|
+| **Windows** | Download [`install-windows.bat`](install-windows.bat) and double-click it. Or paste in PowerShell:<br>`irm https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/install.ps1 \| iex` |
+| **macOS / Linux** | `curl -fsSL https://raw.githubusercontent.com/Ivan-Ryukendo/ExternalSoundboard/main/install.sh \| bash` |
+
+Then restart Discord and enable **ExternalSoundboard** in *Settings > Vencord > Plugins*. Run the same command again later to update. Prefer to do it by hand? See [docs/install-vencord.md](docs/install-vencord.md).
+
+### BetterDiscord
+
+1. Install [BetterDiscord](https://betterdiscord.app).
+2. Download [`ExternalSoundboard.plugin.js`](betterdiscord/ExternalSoundboard.plugin.js) into BetterDiscord's plugins folder (*Settings > BetterDiscord > Plugins > Open Plugins Folder*) and enable it.
+
+Details and a self-check: [docs/install-betterdiscord.md](docs/install-betterdiscord.md).
+
+### Last step for both: a loopback audio device
+
+The plugin sends the sound out as microphone input, so your computer needs an input that records your speakers (Stereo Mix, VB-Cable, BlackHole, a Linux monitor). **[docs/audio-setup.md](docs/audio-setup.md)** compares the options. In short: Stereo Mix is the quick start but leaks your video or music into your voice, and VB-Cable (Windows) or BlackHole (macOS) keeps only the soundboard in.
+
 ## How it works
 
-Discord's server rejects cross-server sounds without Nitro (HTTP 403, code 20015), so a client patch alone only unlocks the button and plays the sound on your side. Nobody else hears it. The plugin instead sends the sound out as microphone input:
+Discord's server rejects cross-server sounds without Nitro (HTTP 403, code 20015). A client patch can only unlock the button and play the sound on your side, so nobody else hears it. This plugin makes the sound leave as your voice instead.
 
-1. Unlocks the button for locked sounds and intercepts the click.
-2. Downloads the sound from Discord's public CDN into memory (nothing is written to disk).
-3. Switches Discord's input to a **loopback device** that records your speakers.
-4. Plays the sound to the matching output, so the loopback device picks it up and Discord sends it as your voice.
-5. Switches the input back to your microphone (and re-mutes you if you were muted).
+```mermaid
+flowchart LR
+    A([You click a sound<br>from another server]) --> B[Plugin unlocks the button<br>and takes over the click]
+    B --> C[Downloads the sound<br>into memory only]
+    C --> D[Switches Discord's input<br>to the loopback device]
+    D --> E[Plays the sound to the output<br>that device records]
+    E --> F([Everyone in the call hears it<br>as your voice])
+    E --> G[Switches back to your mic<br>and re-mutes if needed]
+```
 
-Because step 3 needs a loopback device, **you must set one up on your OS**. See [docs/audio-setup.md](docs/audio-setup.md).
+Nothing is written to disk.
 
-## Platform support
+## Status
 
-| Platform | Vencord | BetterDiscord | Loopback device |
+What has been tested, and what has not:
+
+| | Vencord | BetterDiscord | Loopback device |
 |---|---|---|---|
-| Windows | **Tested** (Discord Canary, Stereo Mix) | Not tested | Stereo Mix or VB-Cable |
-| macOS | Not tested | Not tested | BlackHole + Multi-Output Device |
-| Linux | Not tested | Not tested | PulseAudio/PipeWire monitor |
-| Android / iOS | Not supported | Not supported | n/a |
+| **Windows** | ✅ Tested | ✅ Tested | ✅ Stereo Mix tested, VB-Cable not tested |
+| **macOS** | ⬜ Not tested | ⬜ Not tested | ⬜ BlackHole, not tested |
+| **Linux** | ⬜ Not tested | ⬜ Not tested | ⬜ PulseAudio / PipeWire, not tested |
+| **Android / iOS** | ❌ Not possible | ❌ Not possible | n/a |
 
-"Not tested" means the code is the same and should work, but nobody has confirmed it. Reports and fixes are welcome as issues.
+| Installer | Windows | macOS / Linux |
+|---|---|---|
+| One-command Vencord install | ✅ Download, build and plugin install tested. Injecting into Discord not tested yet | ⬜ Not tested |
 
-## Install
+"Not tested" means the code is shared and should work, but nobody has confirmed it. Please open an issue with what you find.
 
-1. Set up a loopback device: [docs/audio-setup.md](docs/audio-setup.md)
-2. Install the plugin:
-   - Vencord: [docs/install-vencord.md](docs/install-vencord.md)
-   - BetterDiscord: [docs/install-betterdiscord.md](docs/install-betterdiscord.md)
-3. Open the plugin settings and check that the loopback input, microphone, and playback output are right.
+## Roadmap
+
+- [x] Vencord plugin, tested on Windows
+- [x] BetterDiscord port written
+- [x] One-command installers written (Windows, macOS, Linux)
+- [x] BetterDiscord plugin tested on Windows
+- [ ] Test the installer end to end (including Discord injection)
+- [ ] Test on macOS and Linux
+- [x] Decided against the BetterDiscord store and upstream Vencord: their rules forbid Nitro workarounds and AI-written code, so this repo is the home
+- [ ] Ideas: push-to-talk support, hearing the sound without a local echo, a settings option to turn off the level probe
+
+## Known limits
+
+- Everything on the recorded output goes out as your voice. Keep Discord's own output on a different device, or friends hear themselves.
+- While a sound plays, the plugin turns off noise cancellation, echo cancellation, auto gain and the mic gate (and forces voice activity, so push-to-talk users work too), then restores your settings. Switch this off in the plugin settings if you prefer.
+- Sounds Discord greys out because their server lacks boost slots ("Requires higher Server Boost Level") are made clickable too, since Discord still serves the files. The picker also drops its server-icon locks and "Get Nitro" bar, so it looks the same as with Nitro.
+- One sound at a time; clicks during playback are ignored. You cannot play a sound while deafened.
+- The patches depend on Discord's internals and can break when Discord updates.
 
 ## Repository layout
 
 ```
 ExternalSoundboard/
 ├── README.md
-├── LICENSE                                   GPL-3.0
+├── LICENSE                                      GPL-3.0
+├── install.ps1  install.sh  install-windows.bat   one-command Vencord installers
+├── assets/banner.svg
 ├── docs/
-│   ├── audio-setup.md                        loopback device per OS
-│   ├── install-vencord.md
+│   ├── audio-setup.md                           loopback device per OS
+│   ├── install-vencord.md                       manual install
 │   └── install-betterdiscord.md
-├── vencord/externalSoundboard/               copy into Vencord's src/userplugins
-│   ├── index.tsx                             patches, download, device switching, playback
-│   └── settings.tsx                          dropdown settings
+├── vencord/externalSoundboard/                  the Vencord userplugin
+│   ├── index.tsx                                patches, download, device switching, playback
+│   └── settings.tsx                             dropdown settings
 └── betterdiscord/ExternalSoundboard.plugin.js   single-file BetterDiscord plugin
 ```
-
-## Known limits
-
-- Everything playing on the recorded output goes out as your voice. Keep Discord's own output on a different device, or friends hear themselves.
-- Push-to-talk will not transmit the sound unless the key is held.
-- Noise suppression may cut or dull the sound.
-- One sound at a time; clicks during playback are ignored.
-- You cannot play a sound while deafened.
-- The patches depend on Discord's internals and can break when Discord updates.
