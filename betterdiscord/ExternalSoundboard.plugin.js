@@ -22,6 +22,7 @@ const warn = (...a) => BdApi.Logger.warn(NAME, ...fmt(a));
 module.exports = class ExternalSoundboard {
     busy = false;
     relocked = new Set();
+    unavailableIds = new Set();
 
     start() {
         const { Webpack, Patcher } = BdApi;
@@ -62,7 +63,7 @@ module.exports = class ExternalSoundboard {
         // 1b. sounds past their server's boost slots are flagged unavailable (a lock "Requires higher Server Boost Level"), but the CDN still serves them
         const Sounds = Webpack.getStore("SoundboardStore");
         if (Sounds) {
-            const unlock = s => { if (s && s.available === false && s.guildId !== "0") { s.available = true; this.relocked.add(s); } };
+            const unlock = s => { if (s && s.available === false && s.guildId !== "0") { s.available = true; this.relocked.add(s); this.unavailableIds.add(s.soundId); } };
             Patcher.after(NAME, Sounds, "getSoundById", (_, __, ret) => { unlock(ret); });
             Patcher.after(NAME, Sounds, "getSoundsForGuild", (_, __, ret) => { ret?.forEach?.(unlock); });
             Patcher.after(NAME, Sounds, "getSounds", (_, __, ret) => { ret?.forEach?.(list => list?.forEach?.(unlock)); });
@@ -101,6 +102,7 @@ module.exports = class ExternalSoundboard {
         this.restorePremium = null;
         this.relocked.forEach(s => { s.available = false; });
         this.relocked.clear();
+        this.unavailableIds.clear();
         BdApi.Webpack.getStore("SoundboardStore")?.emitChange?.();
     }
 
@@ -108,7 +110,9 @@ module.exports = class ExternalSoundboard {
         try {
             if (!sound?.soundId || typeof channelId !== "string") return false;
             const nitro = [1, 2].includes(this.Users.getCurrentUser().premiumType ?? 0);
-            if (nitro || sound.guildId === "0" || sound.guildId === this.Channels.getChannel(channelId)?.guild_id) return false;
+            const own = sound.guildId === this.Channels.getChannel(channelId)?.guild_id;
+            // a sound Discord flagged unavailable (server out of boost slots) is refused by the server even for its own members and Nitro users
+            if (sound.guildId === "0" || (!this.unavailableIds.has(sound.soundId) && (nitro || own))) return false;
             this.play(sound.soundId);
             return true;
         } catch {

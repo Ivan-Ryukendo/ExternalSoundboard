@@ -70,6 +70,7 @@ async function probeLevel(label: string) {
 let busy = false;
 const Sounds = findStoreLazy("SoundboardStore") as any;
 const relocked = new Set<any>();
+const unavailableIds = new Set<string>();
 const unwrap: (() => void)[] = [];
 
 export default definePlugin({
@@ -81,7 +82,7 @@ export default definePlugin({
     start() {
         restoreVoice(); // repairs voice settings if Discord closed mid-sound last time
         // Sounds past their server's boost slots are flagged unavailable (a lock "Requires higher Server Boost Level"), but the CDN still serves them
-        const unlock = (s: any) => { if (s && s.available === false && s.guildId !== "0") { s.available = true; relocked.add(s); } };
+        const unlock = (s: any) => { if (s && s.available === false && s.guildId !== "0") { s.available = true; relocked.add(s); unavailableIds.add(s.soundId); } };
         const wrap = (name: string, fn: (ret: any) => void) => {
             const orig = Sounds[name];
             Sounds[name] = function (...args: any[]) { const ret = orig.apply(this, args); fn(ret); return ret; };
@@ -99,13 +100,16 @@ export default definePlugin({
         unwrap.splice(0).forEach(f => f());
         relocked.forEach(s => { s.available = false; });
         relocked.clear();
+        unavailableIds.clear();
         Sounds.emitChange?.();
     },
 
     intercept(sound: { soundId: string; guildId: string; }, channelId: string) {
         try {
             const nitro = [1, 2].includes(UserStore.getCurrentUser().premiumType ?? 0);
-            if (nitro || sound.guildId === "0" || sound.guildId === ChannelStore.getChannel(channelId)?.guild_id) return false;
+            const own = sound.guildId === ChannelStore.getChannel(channelId)?.guild_id;
+            // a sound Discord flagged unavailable (server out of boost slots) is refused by the server even for its own members and Nitro users
+            if (sound.guildId === "0" || (!unavailableIds.has(sound.soundId) && (nitro || own))) return false;
             this.playViaLoopback(sound.soundId);
             return true;
         } catch {
