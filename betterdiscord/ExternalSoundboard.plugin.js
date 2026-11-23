@@ -2,7 +2,7 @@
  * @name ExternalSoundboard
  * @author Ivan-Ryukendo
  * @description Plays soundboard sounds from other servers into your voice chat without Nitro, by routing them through a loopback input (Stereo Mix, BlackHole, VB-Cable, a Linux monitor).
- * @version 0.1.0
+ * @version 0.2.0
  * @source https://github.com/Ivan-Ryukendo/ExternalSoundboard
  */
 
